@@ -1,19 +1,21 @@
 package com.drawchat.app.presentation.profile
 
+import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.drawchat.app.data.repository.AuthRepository
-import com.drawchat.app.data.repository.StorageRepository
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.io.ByteArrayOutputStream
 
 class ProfileViewModel : ViewModel() {
     private val authRepository = AuthRepository()
-    private val storageRepository = StorageRepository()
     private val db = FirebaseFirestore.getInstance()
 
     private val _userName = MutableStateFlow("")
@@ -43,24 +45,24 @@ class ProfileViewModel : ViewModel() {
                 val email = authRepository.getCurrentUserEmail() ?: ""
                 _userEmail.value = email
 
-                // Пытаемся загрузить из Firestore
                 val doc = db.collection("users").document(userId).get().await()
                 if (doc.exists()) {
                     _userName.value = doc.getString("name") ?: email.substringBefore("@")
-                    _avatarUrl.value = doc.getString("avatarUrl") ?: ""
+                    _avatarUrl.value = doc.getString("avatarBase64") ?: ""
                 } else {
-                    // Создаем запись пользователя
-                    val userData = hashMapOf(
-                        "name" to email.substringBefore("@"),
-                        "email" to email,
-                        "avatarUrl" to "",
-                        "createdAt" to System.currentTimeMillis()
-                    )
-                    db.collection("users").document(userId).set(userData).await()
-                    _userName.value = email.substringBefore("@")
+                    val defaultName = email.substringBefore("@")
+                    db.collection("users").document(userId).set(
+                        hashMapOf(
+                            "name" to defaultName,
+                            "email" to email,
+                            "avatarBase64" to "",
+                            "createdAt" to System.currentTimeMillis()
+                        )
+                    ).await()
+                    _userName.value = defaultName
                 }
             } catch (e: Exception) {
-                _message.value = "Ошибка загрузки профиля"
+                _message.value = "Ошибка загрузки: ${e.message}"
             }
             _isLoading.value = false
         }
@@ -72,8 +74,7 @@ class ProfileViewModel : ViewModel() {
             try {
                 val userId = authRepository.getCurrentUserId() ?: return@launch
                 db.collection("users").document(userId)
-                    .update("name", name)
-                    .await()
+                    .update("name", name).await()
                 _userName.value = name
                 _message.value = "Имя обновлено!"
             } catch (e: Exception) {
@@ -83,32 +84,31 @@ class ProfileViewModel : ViewModel() {
         }
     }
 
-    fun uploadAvatar(uri: Uri) {
+    fun uploadAvatar(uri: Uri, context: Context) {
         viewModelScope.launch {
             _isLoading.value = true
-            val result = storageRepository.uploadImage(uri)
-            result.fold(
-                onSuccess = { url ->
-                    val userId = authRepository.getCurrentUserId() ?: return@launch
-                    db.collection("users").document(userId)
-                        .update("avatarUrl", url)
-                        .await()
-                    _avatarUrl.value = url
-                    _message.value = "Фото обновлено!"
-                },
-                onFailure = { error ->
-                    _message.value = error.message
-                }
-            )
+            try {
+                val userId = authRepository.getCurrentUserId() ?: return@launch
+
+                val inputStream = context.contentResolver.openInputStream(uri)
+                val bitmap = BitmapFactory.decodeStream(inputStream)
+                inputStream?.close()
+
+                val baos = ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 50, baos)
+                val base64 = Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT)
+
+                db.collection("users").document(userId)
+                    .update("avatarBase64", base64).await()
+                _avatarUrl.value = base64
+                _message.value = "Фото обновлено!"
+            } catch (e: Exception) {
+                _message.value = "Ошибка фото: ${e.message}"
+            }
             _isLoading.value = false
         }
     }
 
-    fun logout() {
-        authRepository.logout()
-    }
-
-    fun clearMessage() {
-        _message.value = null
-    }
+    fun logout() { authRepository.logout() }
+    fun clearMessage() { _message.value = null }
 }

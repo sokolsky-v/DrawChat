@@ -1,8 +1,11 @@
 package com.drawchat.app.presentation.profile
 
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,11 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +36,7 @@ fun ProfileScreen(
     onBackClick: () -> Unit = {},
     onLogoutClick: () -> Unit
 ) {
+    val context = LocalContext.current
     var isEditingName by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -45,7 +50,7 @@ fun ProfileScreen(
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let { viewModel.uploadAvatar(it) }
+        uri?.let { viewModel.uploadAvatar(it, context) }
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -87,12 +92,27 @@ fun ProfileScreen(
                 contentAlignment = Alignment.Center
             ) {
                 if (avatarUrl.isNotEmpty()) {
-                    AsyncImage(
-                        model = avatarUrl,
-                        contentDescription = "Аватар",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                    val avatarBitmap = remember(avatarUrl) {
+                        try {
+                            val bytes = Base64.decode(avatarUrl, Base64.DEFAULT)
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        } catch (e: Exception) { null }
+                    }
+                    if (avatarBitmap != null) {
+                        Image(
+                            bitmap = avatarBitmap.asImageBitmap(),
+                            contentDescription = "Аватар",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(60.dp),
+                            tint = Color(0xFFB2EBB2)
+                        )
+                    }
                 } else {
                     Icon(
                         Icons.Default.Person,
@@ -104,9 +124,9 @@ fun ProfileScreen(
             }
 
             Text(
-                "Изменить фото",
+                "Нажмите чтобы изменить фото",
                 color = Color(0xFFB2EBB2),
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 modifier = Modifier.padding(top = 8.dp, bottom = 32.dp)
             )
 
@@ -119,7 +139,8 @@ fun ProfileScreen(
                         isEditingName = true
                     },
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -129,11 +150,15 @@ fun ProfileScreen(
                 ) {
                     Icon(Icons.Default.Person, null, tint = Color(0xFFB2EBB2))
                     Spacer(Modifier.width(12.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Имя", fontSize = 12.sp, color = Color.Gray)
-                        Text(userName.ifEmpty { "Не задано" }, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            userName.ifEmpty { "Не задано" },
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF333333)
+                        )
                     }
-                    Spacer(Modifier.weight(1f))
                     Icon(Icons.Default.Edit, "Изменить", tint = Color.Gray)
                 }
             }
@@ -144,7 +169,8 @@ fun ProfileScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -156,32 +182,11 @@ fun ProfileScreen(
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text("Email", fontSize = 12.sp, color = Color.Gray)
-                        Text(userEmail.ifEmpty { "Не задано" }, fontSize = 16.sp)
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // Статистика
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("0", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB2EBB2))
-                        Text("рисунков", fontSize = 12.sp, color = Color.Gray)
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("0", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB2EBB2))
-                        Text("чатов", fontSize = 12.sp, color = Color.Gray)
+                        Text(
+                            userEmail.ifEmpty { "Не задано" },
+                            fontSize = 16.sp,
+                            color = Color(0xFF333333)
+                        )
                     }
                 }
             }
@@ -191,13 +196,17 @@ fun ProfileScreen(
             // Выход
             Button(
                 onClick = { showLogoutDialog = true },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.8f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Red.copy(alpha = 0.8f)
+                ),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(Icons.AutoMirrored.Filled.ExitToApp, null)
+                Icon(Icons.AutoMirrored.Filled.ExitToApp, null, tint = Color.White)
                 Spacer(Modifier.width(8.dp))
-                Text("Выйти из аккаунта")
+                Text("Выйти из аккаунта", color = Color.White)
             }
 
             if (isLoading) {
@@ -225,9 +234,11 @@ fun ProfileScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.updateName(newName)
-                    isEditingName = false
-                }) { Text("Сохранить") }
+                    if (newName.isNotBlank()) {
+                        viewModel.updateName(newName)
+                        isEditingName = false
+                    }
+                }) { Text("Сохранить", color = Color(0xFFB2EBB2)) }
             },
             dismissButton = {
                 TextButton(onClick = { isEditingName = false }) { Text("Отмена") }

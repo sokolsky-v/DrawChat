@@ -1,5 +1,8 @@
 package com.drawchat.app.presentation.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,9 +21,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.drawchat.app.data.model.Message
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.tasks.await
 
 val colorPalette = listOf(
     Color.Black, Color.White, Color.Red, Color(0xFFFF5722),
@@ -37,33 +43,84 @@ fun ChatRoomScreen(
     chatId: String,
     onBackClick: () -> Unit
 ) {
+    val context = LocalContext.current
     var messageText by remember { mutableStateOf("") }
     var selectedColor by remember { mutableStateOf(Color.Black) }
     var strokeWidth by remember { mutableStateOf(5f) }
     var showComments by remember { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
     var showStrokePicker by remember { mutableStateOf(false) }
+    var chatInviteCode by remember { mutableStateOf("") }
+    var isEraser by remember { mutableStateOf(false) }
 
     LaunchedEffect(chatId) {
         viewModel.loadMessages(chatId)
+        try {
+            val doc = FirebaseFirestore.getInstance().collection("chats").document(chatId).get().await()
+            chatInviteCode = doc.getString("inviteCode") ?: ""
+        } catch (_: Exception) { }
     }
 
     val messages by viewModel.messages.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val saveSuccess by viewModel.saveSuccess.collectAsState()
+
+    LaunchedEffect(saveSuccess) {
+        if (saveSuccess) {
+            Toast.makeText(context, "Рисунок сохранен в Мои работы!", Toast.LENGTH_SHORT).show()
+            viewModel.resetSaveSuccess()
+        }
+    }
+
+    LaunchedEffect(error) {
+        error?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            viewModel.clearError()
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Чат художников", fontSize = 18.sp) },
+                title = {
+                    Column {
+                        Text("Чат художников", fontSize = 18.sp)
+                        if (chatInviteCode.isNotEmpty()) {
+                            Text("Код: $chatInviteCode", fontSize = 12.sp, color = Color(0xFFB2EBB2))
+                        }
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(onClick = {
+                        viewModel.saveImmediately()
+                        onBackClick()
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.clearCanvas() }) {
-                        Icon(Icons.Default.Delete, "Очистить холст")
+                    if (chatInviteCode.isNotEmpty()) {
+                        IconButton(onClick = {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("code", chatInviteCode))
+                            Toast.makeText(context, "Код скопирован!", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Icon(Icons.Default.ContentCopy, "Копировать код", tint = Color(0xFFB2EBB2))
+                        }
                     }
-                    IconButton(onClick = { /* сохранить */ }) {
+                    IconButton(onClick = { isEraser = !isEraser }) {
+                        Icon(
+                            if (isEraser) Icons.Default.AutoFixHigh else Icons.Default.AutoFixNormal,
+                            "Ластик",
+                            tint = if (isEraser) Color.Red else Color.Gray
+                        )
+                    }
+                    IconButton(onClick = { viewModel.clearCanvas() }) {
+                        Icon(Icons.Default.Delete, "Очистить")
+                    }
+                    IconButton(onClick = {
+                        viewModel.saveDrawing(context)
+                    }) {
                         Icon(Icons.Default.Save, "Сохранить")
                     }
                 },
@@ -78,17 +135,16 @@ fun ChatRoomScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Холст для рисования
             CanvasView(
                 selectedColor = selectedColor,
                 strokeWidth = strokeWidth,
-                onDrawEvent = { point -> viewModel.sendDrawEvent(point) },
+                isEraser = isEraser,
+                viewModel = viewModel,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(0.55f)
             )
 
-            // Панель инструментов
             DrawingToolsPanel(
                 selectedColor = selectedColor,
                 onColorChange = { selectedColor = it },
@@ -102,7 +158,6 @@ fun ChatRoomScreen(
 
             Divider()
 
-            // Комментарии (сворачиваемые)
             Column(
                 modifier = Modifier
                     .weight(if (showComments) 0.35f else 0.05f)
@@ -122,11 +177,8 @@ fun ChatRoomScreen(
                         contentDescription = null,
                         tint = Color.Gray
                     )
-                    Text(
-                        "Комментарии (${messages.size})",
-                        color = Color.Gray,
-                        fontSize = 14.sp
-                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Комментарии (${messages.size})", color = Color.Gray, fontSize = 14.sp)
                 }
 
                 if (showComments) {
@@ -144,7 +196,6 @@ fun ChatRoomScreen(
                 }
             }
 
-            // Поле ввода
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -159,7 +210,6 @@ fun ChatRoomScreen(
                     shape = RoundedCornerShape(20.dp),
                     singleLine = true
                 )
-
                 IconButton(
                     onClick = {
                         if (messageText.isNotBlank()) {
@@ -168,11 +218,7 @@ fun ChatRoomScreen(
                         }
                     }
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        "Отправить",
-                        tint = Color(0xFFB2EBB2)
-                    )
+                    Icon(Icons.AutoMirrored.Filled.Send, "Отправить", tint = Color(0xFFB2EBB2))
                 }
             }
         }
@@ -201,7 +247,6 @@ fun DrawingToolsPanel(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Текущий цвет
             Box(
                 modifier = Modifier
                     .size(36.dp)
@@ -211,7 +256,6 @@ fun DrawingToolsPanel(
                     .clickable { onToggleColorPicker() }
             )
 
-            // Быстрые цвета (8 штук)
             for (i in 0..7) {
                 val color = colorPalette[i]
                 Box(
@@ -228,7 +272,6 @@ fun DrawingToolsPanel(
                 )
             }
 
-            // Толщина
             Box(
                 modifier = Modifier
                     .size(36.dp)
@@ -238,7 +281,11 @@ fun DrawingToolsPanel(
                     .clickable { onToggleStrokePicker() },
                 contentAlignment = Alignment.Center
             ) {
-                val dotSize = if (strokeWidth > 20f) 20.dp else if (strokeWidth < 2f) 2.dp else strokeWidth.dp
+                val dotSize = when {
+                    strokeWidth > 20f -> 20.dp
+                    strokeWidth < 2f -> 2.dp
+                    else -> strokeWidth.dp
+                }
                 Box(
                     modifier = Modifier
                         .size(dotSize)
@@ -248,12 +295,9 @@ fun DrawingToolsPanel(
             }
         }
 
-        // Полная палитра
         if (showColorPicker) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 colorPalette.forEach { color ->
@@ -276,12 +320,9 @@ fun DrawingToolsPanel(
             }
         }
 
-        // Слайдер толщины
         if (showStrokePicker) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("1", fontSize = 12.sp, color = Color.Gray)
@@ -300,25 +341,17 @@ fun DrawingToolsPanel(
 @Composable
 fun MessageBubble(message: Message) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
-        Row(
-            modifier = Modifier.padding(8.dp),
-            verticalAlignment = Alignment.Top
-        ) {
+        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.Top) {
             Text(
                 text = message.senderName + ": ",
                 fontSize = 12.sp,
                 color = Color(0xFFB2EBB2)
             )
-            Text(
-                text = message.text,
-                fontSize = 12.sp
-            )
+            Text(text = message.text, fontSize = 12.sp)
         }
     }
 }
